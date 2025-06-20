@@ -1,0 +1,6 @@
+package wasmcloud:hello;
+
+world cmp {
+    import yasp:giga/wc;
+    export wasi:http/incoming-handler@0.2.2;
+}

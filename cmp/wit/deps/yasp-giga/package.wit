@@ -1,0 +1,6 @@
+package yasp:giga;
+
+interface wc {
+  whoami: func(name: string) -> string;
+}
+

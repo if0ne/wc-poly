@@ -1,0 +1,5 @@
+package yasp:provider;
+
+world provider {
+    export yasp:giga/wc;
+}
