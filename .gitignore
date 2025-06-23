@@ -1,2 +1,5 @@
 target
 build
+/*/wit/deps
+/prv/bin_prv
+wasmcloud.lock
