@@ -24,7 +24,7 @@ spec:
           properties:
             target: prv
             namespace: yasp
-            package: provider
+            package: giga
             interfaces: [wc]
 
     - name: httpserver
