@@ -24,7 +24,7 @@ impl http::Server for Component {
     ) -> http::Result<http::Response<impl http::OutgoingBody>> {
         let mut arg = String::new();
         let _ = request.body_mut().read_to_string(&mut arg);
-        let giga_wc = wc::whoami(&arg);
+        let giga_wc = wc::prompt(&arg);
 
         Ok(http::Response::new(giga_wc))
     }
