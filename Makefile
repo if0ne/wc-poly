@@ -7,7 +7,6 @@ all: build deploy
 
 clean:
 	wash app delete wadm.yaml
-	nats kv del $(PROJECT_NAME)
 
 build:
 	@echo "Starting build process..."
