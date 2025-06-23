@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd"
 	server "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings"
 	"go.wasmcloud.dev/provider"
 )
@@ -19,7 +21,12 @@ func main() {
 }
 
 func run() error {
+	client, err := api.ClientFromEnvironment()
+	if err != nil {
+		return err
+	}
 	providerHandler := Handler{
+		client:     client,
 		linkedFrom: make(map[string]map[string]string),
 		linkedTo:   make(map[string]map[string]string),
 	}
@@ -51,6 +58,14 @@ func run() error {
 
 	providerCh := make(chan error, 1)
 	signalCh := make(chan os.Signal, 1)
+
+	go func() {
+		if err := cmd.RunServer(nil, nil); err != nil {
+			providerHandler.provider.Logger.Info("Failed to start ollama")
+		} else {
+			providerHandler.provider.Logger.Info("Started ollama")
+		}
+	}()
 
 	stopFunc, err := server.Serve(p.RPCClient, &providerHandler)
 	if err != nil {
