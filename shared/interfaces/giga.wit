@@ -1,6 +1,40 @@
 package yasp:giga;
 
 interface wc {
+    record message-request {
+        role: string,
+        content: string,
+    }
+
+    record prompt-request {
+        model: string,
+        messages: list<message-request>
+    }
+
+    record metrics {
+        total: u64,
+        load: u64,
+        prompt-eval-count: u32,
+        prompt-eval-duration: u64,
+        eval-count: u32,
+        eval-duration: u64,
+    }
+
+    record message-response {
+        role: string,
+        content: string,
+        thinking: string,
+        images: list<list<u8>>,
+    }
+
+    record prompt-response {
+        model: string,
+        create-at: string,
+        message: message-response,
+        done-reason: string,
+        metrics: metrics
+    }
+
     whoami: func(name: string) -> string;
-    prompt: func(name: string) -> string;
+    prompt: func(req: prompt-request) -> prompt-response;
 }

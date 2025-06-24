@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -10,11 +11,31 @@ import (
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/cmd"
+	"github.com/spf13/cobra"
 	server "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings"
 	"go.wasmcloud.dev/provider"
 )
 
 func main() {
+	if _, err := os.UserHomeDir(); err != nil {
+		if err := os.Setenv("HOME", "~"); err != nil {
+			return
+		}
+	}
+
+	command := cmd.NewCLI()
+	command.Run = nil
+	command.RunE = func(_ *cobra.Command, args []string) error {
+		go func() {
+			if err := cmd.RunServer(nil, nil); err != nil {
+
+			}
+		}()
+
+		return nil
+	}
+	cobra.CheckErr(command.ExecuteContext(context.Background()))
+
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
@@ -25,6 +46,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
 	providerHandler := Handler{
 		client:     client,
 		linkedFrom: make(map[string]map[string]string),
@@ -58,14 +80,6 @@ func run() error {
 
 	providerCh := make(chan error, 1)
 	signalCh := make(chan os.Signal, 1)
-
-	go func() {
-		if err := cmd.RunServer(nil, nil); err != nil {
-			providerHandler.provider.Logger.Info("Failed to start ollama")
-		} else {
-			providerHandler.provider.Logger.Info("Started ollama")
-		}
-	}()
 
 	stopFunc, err := server.Serve(p.RPCClient, &providerHandler)
 	if err != nil {
