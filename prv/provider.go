@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ollama/ollama/api"
-	"github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/yasp/giga/wc"
+	"github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/yasp/llm/ollama"
 	sdk "go.wasmcloud.dev/provider"
 )
 
@@ -21,7 +21,7 @@ type Handler struct {
 	linkedTo   map[string]map[string]string
 }
 
-func (h *Handler) Chat(ctx context.Context, req *wc.ChatRequest) (*wc.ChatResponse, error) {
+func (h *Handler) Chat(ctx context.Context, req *ollama.ChatRequest) (*ollama.ChatResponse, error) {
 	pullReq := &api.PullRequest{Model: req.Model}
 	err := h.client.Pull(ctx, pullReq, func(status api.ProgressResponse) error {
 		return nil
@@ -63,14 +63,14 @@ func (h *Handler) Chat(ctx context.Context, req *wc.ChatRequest) (*wc.ChatRespon
 		images = append(images, []byte(img))
 	}
 
-	msg := &wc.ChatMessageResponse{
+	msg := &ollama.ChatMessageResponse{
 		Role:     response.Message.Role,
 		Content:  response.Message.Content,
 		Thinking: response.Message.Thinking,
 		Images:   images,
 	}
 
-	metrics := &wc.Metrics{
+	metrics := &ollama.Metrics{
 		Total:              uint64(response.Metrics.TotalDuration),
 		Load:               uint64(response.Metrics.LoadDuration),
 		PromptEvalCount:    uint32(response.Metrics.PromptEvalCount),
@@ -79,7 +79,7 @@ func (h *Handler) Chat(ctx context.Context, req *wc.ChatRequest) (*wc.ChatRespon
 		EvalDuration:       uint64(response.Metrics.EvalDuration),
 	}
 
-	resp := &wc.ChatResponse{
+	resp := &ollama.ChatResponse{
 		Model:      req.Model,
 		CreateAt:   response.CreatedAt.Format("2006-01-02 15:04:05"),
 		Message:    msg,

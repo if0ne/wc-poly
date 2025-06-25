@@ -1,5 +1,5 @@
 package yasp:provider;
 
 world provider {
-    export yasp:giga/wc;
+    export yasp:llm/ollama;
 }

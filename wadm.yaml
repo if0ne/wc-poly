@@ -24,8 +24,8 @@ spec:
           properties:
             target: prv
             namespace: yasp
-            package: giga
-            interfaces: [wc]
+            package: llm
+            interfaces: [ollama]
 
     - name: httpserver
       type: capability

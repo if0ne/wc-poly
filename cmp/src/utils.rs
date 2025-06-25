@@ -51,3 +51,10 @@ pub fn make_response<T: Serialize + ?Sized>(
         .body(body)
         .map_err(|e| http::ErrorCode::InternalError(Some(format!("failed to build response: {e}"))))
 }
+
+pub fn make_empty_response(code: http::StatusCode) -> http::Result<http::Response<String>> {
+    http::Response::builder()
+        .status(code)
+        .body(String::new())
+        .map_err(|e| http::ErrorCode::InternalError(Some(format!("failed to build response: {e}"))))
+}

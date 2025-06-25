@@ -40,7 +40,7 @@ func main() {
 
 	StartMemoryMonitor(context.Background(), MemoryMonitorConfig{
 		ParentPID:  int32(os.Getpid()),
-		LimitBytes: 1300 * 1024 * 1024,
+		LimitBytes: 16 * 1024 * 1024 * 1024,
 		Interval:   2 * time.Second,
 		OnLimitExceed: func(proc *process.Process) {
 			_ = proc.Kill()

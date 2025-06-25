@@ -8,5 +8,5 @@ wit_world = "cmp"
 wasm_target = "wasm32-wasip2"
 
 [[registry.pull.sources]]
-target = "yasp:giga"
-source = "file://../shared/interfaces/giga.wit"
+target = "yasp:llm"
+source = "file://../shared/interfaces/ollama.wit"

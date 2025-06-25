@@ -3,11 +3,11 @@
 package provider
 
 import (
-	exports__yasp__giga__wc "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/yasp/giga/wc"
+	exports__yasp__llm__ollama "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/yasp/llm/ollama"
 	wrpc "wrpc.io/go"
 )
 
-func Serve(s wrpc.Server, h0 exports__yasp__giga__wc.Handler) (stop func() error, err error) {
+func Serve(s wrpc.Server, h0 exports__yasp__llm__ollama.Handler) (stop func() error, err error) {
 	stops := make([]func() error, 0, 1)
 	stop = func() error {
 		for _, stop := range stops {
@@ -17,7 +17,7 @@ func Serve(s wrpc.Server, h0 exports__yasp__giga__wc.Handler) (stop func() error
 		}
 		return nil
 	}
-	stop0, err := exports__yasp__giga__wc.ServeInterface(s, h0)
+	stop0, err := exports__yasp__llm__ollama.ServeInterface(s, h0)
 	if err != nil {
 		return
 	}

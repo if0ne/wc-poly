@@ -1,6 +1,8 @@
-package yasp:giga;
+package yasp:llm;
 
-interface wc {
+interface ollama {
+    chat: func(req: chat-request) -> chat-response;
+
     record chat-message-request {
         role: string,
         content: string,
@@ -34,6 +36,4 @@ interface wc {
         done-reason: string,
         metrics: metrics
     }
-
-    chat: func(req: chat-request) -> chat-response;
 }
