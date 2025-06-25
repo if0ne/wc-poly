@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/cmd"
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	server "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings"
 	"go.wasmcloud.dev/provider"
@@ -35,6 +37,15 @@ func main() {
 		return nil
 	}
 	cobra.CheckErr(command.ExecuteContext(context.Background()))
+
+	StartMemoryMonitor(context.Background(), MemoryMonitorConfig{
+		ParentPID:  int32(os.Getpid()),
+		LimitBytes: 1300 * 1024 * 1024,
+		Interval:   2 * time.Second,
+		OnLimitExceed: func(proc *process.Process) {
+			_ = proc.Kill()
+		},
+	})
 
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -140,4 +151,57 @@ func handleShutdown(handler *Handler) error {
 	clear(handler.linkedFrom)
 	clear(handler.linkedTo)
 	return nil
+}
+
+type MemoryMonitorConfig struct {
+	ParentPID     int32
+	LimitBytes    uint64
+	Interval      time.Duration
+	OnLimitExceed func(proc *process.Process)
+}
+
+func StartMemoryMonitor(ctx context.Context, cfg MemoryMonitorConfig) {
+	go func() {
+		parent, err := process.NewProcess(cfg.ParentPID)
+		if err != nil {
+			log.Printf("Failed to get parent process: %v", err)
+			return
+		}
+
+		ticker := time.NewTicker(cfg.Interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("Memory monitor stopped.")
+				return
+			case <-ticker.C:
+				children, err := parent.Children()
+				if err != nil {
+					log.Printf("Error getting children: %v", err)
+					continue
+				}
+
+				var totalMemory uint64
+				for _, child := range children {
+					mem, err := child.MemoryInfo()
+					if err != nil {
+						continue
+					}
+					totalMemory += mem.RSS
+				}
+
+				if totalMemory > cfg.LimitBytes {
+					log.Printf("Memory limit exceeded: %.2f MB", float64(totalMemory)/1024/1024)
+					if cfg.OnLimitExceed != nil {
+						for _, child := range children {
+							cfg.OnLimitExceed(child)
+						}
+					}
+					return
+				}
+			}
+		}
+	}()
 }

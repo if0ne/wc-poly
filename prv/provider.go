@@ -21,20 +21,7 @@ type Handler struct {
 	linkedTo   map[string]map[string]string
 }
 
-func (h *Handler) Whoami(ctx context.Context, name string) (string, error) {
-	switch name {
-	case "Паша":
-		return "Привет, растоманы", nil
-	case "Саид":
-		return "Привет вайбкодерам, остальным соболезную", nil
-	case "Дима":
-		return "Че за х*йня", nil
-	default:
-		return "Привет, ноунеймы", nil
-	}
-}
-
-func (h *Handler) Prompt(ctx context.Context, req *wc.PromptRequest) (*wc.PromptResponse, error) {
+func (h *Handler) Chat(ctx context.Context, req *wc.ChatRequest) (*wc.ChatResponse, error) {
 	pullReq := &api.PullRequest{Model: req.Model}
 	err := h.client.Pull(ctx, pullReq, func(status api.ProgressResponse) error {
 		return nil
@@ -76,7 +63,7 @@ func (h *Handler) Prompt(ctx context.Context, req *wc.PromptRequest) (*wc.Prompt
 		images = append(images, []byte(img))
 	}
 
-	msg := &wc.MessageResponse{
+	msg := &wc.ChatMessageResponse{
 		Role:     response.Message.Role,
 		Content:  response.Message.Content,
 		Thinking: response.Message.Thinking,
@@ -92,7 +79,7 @@ func (h *Handler) Prompt(ctx context.Context, req *wc.PromptRequest) (*wc.Prompt
 		EvalDuration:       uint64(response.Metrics.EvalDuration),
 	}
 
-	resp := &wc.PromptResponse{
+	resp := &wc.ChatResponse{
 		Model:      req.Model,
 		CreateAt:   response.CreatedAt.Format("2006-01-02 15:04:05"),
 		Message:    msg,

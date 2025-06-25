@@ -16,14 +16,14 @@ import (
 	wrpc "wrpc.io/go"
 )
 
-type MessageRequest struct {
+type ChatMessageRequest struct {
 	Role    string
 	Content string
 }
 
-func (v *MessageRequest) String() string { return "MessageRequest" }
+func (v *ChatMessageRequest) String() string { return "ChatMessageRequest" }
 
-func (v *MessageRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
+func (v *ChatMessageRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
 	writes := make(map[uint32]func(wrpc.IndexWriter) error, 2)
 	slog.Debug("writing field", "name", "role")
 	write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
@@ -111,14 +111,14 @@ func (v *MessageRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter)
 	return nil, nil
 }
 
-type PromptRequest struct {
+type ChatRequest struct {
 	Model    string
-	Messages []*MessageRequest
+	Messages []*ChatMessageRequest
 }
 
-func (v *PromptRequest) String() string { return "PromptRequest" }
+func (v *ChatRequest) String() string { return "ChatRequest" }
 
-func (v *PromptRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
+func (v *ChatRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
 	writes := make(map[uint32]func(wrpc.IndexWriter) error, 2)
 	slog.Debug("writing field", "name", "model")
 	write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
@@ -149,7 +149,7 @@ func (v *PromptRequest) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) 
 		writes[0] = write0
 	}
 	slog.Debug("writing field", "name", "messages")
-	write1, err := func(v []*MessageRequest, w interface {
+	write1, err := func(v []*ChatMessageRequest, w interface {
 		io.ByteWriter
 		io.Writer
 	}) (write func(wrpc.IndexWriter) error, err error) {
@@ -368,16 +368,16 @@ func (v *Metrics) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error,
 	return nil, nil
 }
 
-type MessageResponse struct {
+type ChatMessageResponse struct {
 	Role     string
 	Content  string
 	Thinking string
 	Images   [][]uint8
 }
 
-func (v *MessageResponse) String() string { return "MessageResponse" }
+func (v *ChatMessageResponse) String() string { return "ChatMessageResponse" }
 
-func (v *MessageResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
+func (v *ChatMessageResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
 	writes := make(map[uint32]func(wrpc.IndexWriter) error, 4)
 	slog.Debug("writing field", "name", "role")
 	write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
@@ -614,17 +614,17 @@ func (v *MessageResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter
 	return nil, nil
 }
 
-type PromptResponse struct {
+type ChatResponse struct {
 	Model      string
 	CreateAt   string
-	Message    *MessageResponse
+	Message    *ChatMessageResponse
 	DoneReason string
 	Metrics    *Metrics
 }
 
-func (v *PromptResponse) String() string { return "PromptResponse" }
+func (v *ChatResponse) String() string { return "ChatResponse" }
 
-func (v *PromptResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
+func (v *ChatResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter) error, error) {
 	writes := make(map[uint32]func(wrpc.IndexWriter) error, 5)
 	slog.Debug("writing field", "name", "model")
 	write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
@@ -757,12 +757,11 @@ func (v *PromptResponse) WriteToIndex(w wrpc.ByteWriter) (func(wrpc.IndexWriter)
 }
 
 type Handler interface {
-	Whoami(ctx__ context.Context, name string) (string, error)
-	Prompt(ctx__ context.Context, req *PromptRequest) (*PromptResponse, error)
+	Chat(ctx__ context.Context, req *ChatRequest) (*ChatResponse, error)
 }
 
 func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
-	stops := make([]func() error, 0, 2)
+	stops := make([]func() error, 0, 1)
 	stop = func() error {
 		for _, stop := range stops {
 			if err := stop(); err != nil {
@@ -772,141 +771,15 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		return nil
 	}
 
-	stop0, err := s.Serve("yasp:giga/wc", "whoami", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+	stop0, err := s.Serve("yasp:giga/wc", "chat", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
 		defer func() {
 			if err := w.Close(); err != nil {
-				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
+				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			}
 		}()
 		slog.DebugContext(ctx, "reading parameter", "i", 0)
-		p0, err := func(r interface {
-			io.ByteReader
-			io.Reader
-		}) (string, error) {
-			var x uint32
-			var s uint8
-			for i := 0; i < 5; i++ {
-				slog.Debug("reading string length byte", "i", i)
-				b, err := r.ReadByte()
-				if err != nil {
-					if i > 0 && err == io.EOF {
-						err = io.ErrUnexpectedEOF
-					}
-					return "", fmt.Errorf("failed to read string length byte: %w", err)
-				}
-				if s == 28 && b > 0x0f {
-					return "", errors.New("string length overflows a 32-bit integer")
-				}
-				if b < 0x80 {
-					x = x | uint32(b)<<s
-					if x == 0 {
-						return "", nil
-					}
-					buf := make([]byte, x)
-					slog.Debug("reading string bytes", "len", x)
-					_, err = r.Read(buf)
-					if err != nil {
-						return "", fmt.Errorf("failed to read string bytes: %w", err)
-					}
-					if !utf8.Valid(buf) {
-						return string(buf), errors.New("string is not valid UTF-8")
-					}
-					return string(buf), nil
-				}
-				x |= uint32(b&0x7f) << s
-				s += 7
-			}
-			return "", errors.New("string length overflows a 32-bit integer")
-		}(r)
-
-		if err != nil {
-			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-			if err := r.Close(); err != nil {
-				slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-			}
-			return
-		}
-		slog.DebugContext(ctx, "calling `yasp:giga/wc.whoami` handler")
-		r0, err := h.Whoami(ctx, p0)
-		if cErr := r.Close(); cErr != nil {
-			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-		}
-		if err != nil {
-			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-			return
-		}
-
-		var buf bytes.Buffer
-		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
-
-		write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
-			n := len(v)
-			if n > math.MaxUint32 {
-				return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
-			}
-			if err = func(v int, w io.Writer) error {
-				b := make([]byte, binary.MaxVarintLen32)
-				i := binary.PutUvarint(b, uint64(v))
-				slog.Debug("writing string byte length", "len", n)
-				_, err = w.Write(b[:i])
-				return err
-			}(n, w); err != nil {
-				return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
-			}
-			slog.Debug("writing string bytes")
-			_, err = w.Write([]byte(v))
-			if err != nil {
-				return fmt.Errorf("failed to write string bytes: %w", err)
-			}
-			return nil
-		}(r0, &buf)
-		if err != nil {
-			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-			return
-		}
-		if write0 != nil {
-			writes[0] = write0
-		}
-		slog.DebugContext(ctx, "transmitting `yasp:giga/wc.whoami` result")
-		_, err = w.Write(buf.Bytes())
-		if err != nil {
-			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-			return
-		}
-		if len(writes) > 0 {
-			for index, write := range writes {
-				_ = write
-				switch index {
-				case 0:
-					w, err := w.Index(0)
-					if err != nil {
-						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-						return
-					}
-					write := write
-					go func() {
-						if err := write(w); err != nil {
-							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:giga/wc", "name", "whoami", "err", err)
-						}
-					}()
-				}
-			}
-		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to serve `yasp:giga/wc.whoami`: %w", err)
-	}
-	stops = append(stops, stop0)
-
-	stop1, err := s.Serve("yasp:giga/wc", "prompt", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
-		defer func() {
-			if err := w.Close(); err != nil {
-				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
-			}
-		}()
-		slog.DebugContext(ctx, "reading parameter", "i", 0)
-		p0, err := func(r wrpc.IndexReadCloser, path ...uint32) (*PromptRequest, error) {
-			v := &PromptRequest{}
+		p0, err := func(r wrpc.IndexReadCloser, path ...uint32) (*ChatRequest, error) {
+			v := &ChatRequest{}
 			var err error
 			slog.Debug("reading field", "name", "model")
 			v.Model, err = func(r interface {
@@ -952,7 +825,7 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 				return nil, fmt.Errorf("failed to read `model` field: %w", err)
 			}
 			slog.Debug("reading field", "name", "messages")
-			v.Messages, err = func(r wrpc.IndexReadCloser, path ...uint32) ([]*MessageRequest, error) {
+			v.Messages, err = func(r wrpc.IndexReadCloser, path ...uint32) ([]*ChatMessageRequest, error) {
 				var x uint32
 				var s uint
 				for i := 0; i < 5; i++ {
@@ -972,11 +845,11 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 						if x == 0 {
 							return nil, nil
 						}
-						vs := make([]*MessageRequest, x)
+						vs := make([]*ChatMessageRequest, x)
 						for i := range vs {
 							slog.Debug("reading list element", "i", i)
-							vs[i], err = func(r wrpc.IndexReadCloser, path ...uint32) (*MessageRequest, error) {
-								v := &MessageRequest{}
+							vs[i], err = func(r wrpc.IndexReadCloser, path ...uint32) (*ChatMessageRequest, error) {
+								v := &ChatMessageRequest{}
 								var err error
 								slog.Debug("reading field", "name", "role")
 								v.Role, err = func(r interface {
@@ -1084,19 +957,19 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		}(r, []uint32{0}...)
 
 		if err != nil {
-			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			if err := r.Close(); err != nil {
-				slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+				slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			}
 			return
 		}
-		slog.DebugContext(ctx, "calling `yasp:giga/wc.prompt` handler")
-		r0, err := h.Prompt(ctx, p0)
+		slog.DebugContext(ctx, "calling `yasp:giga/wc.chat` handler")
+		r0, err := h.Chat(ctx, p0)
 		if cErr := r.Close(); cErr != nil {
-			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 		}
 		if err != nil {
-			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			return
 		}
 
@@ -1105,16 +978,16 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 
 		write0, err := (r0).WriteToIndex(&buf)
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			return
 		}
 		if write0 != nil {
 			writes[0] = write0
 		}
-		slog.DebugContext(ctx, "transmitting `yasp:giga/wc.prompt` result")
+		slog.DebugContext(ctx, "transmitting `yasp:giga/wc.chat` result")
 		_, err = w.Write(buf.Bytes())
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 			return
 		}
 		if len(writes) > 0 {
@@ -1124,13 +997,13 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 				case 0:
 					w, err := w.Index(0)
 					if err != nil {
-						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 						return
 					}
 					write := write
 					go func() {
 						if err := write(w); err != nil {
-							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:giga/wc", "name", "prompt", "err", err)
+							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:giga/wc", "name", "chat", "err", err)
 						}
 					}()
 				}
@@ -1138,8 +1011,8 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to serve `yasp:giga/wc.prompt`: %w", err)
+		return nil, fmt.Errorf("failed to serve `yasp:giga/wc.chat`: %w", err)
 	}
-	stops = append(stops, stop1)
+	stops = append(stops, stop0)
 	return stop, nil
 }

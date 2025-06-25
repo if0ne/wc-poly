@@ -24,19 +24,19 @@ use crate::{
 struct Component;
 
 #[derive(Debug, Deserialize)]
-struct MessageRequest {
+struct ChatMessageRequest {
     pub role: String,
     pub content: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct PromptRequest {
+struct ChatRequest {
     pub model: String,
-    pub messages: Vec<MessageRequest>,
+    pub messages: Vec<ChatMessageRequest>,
 }
 
 #[derive(Debug, Serialize)]
-struct MessageResponse {
+struct ChatMessageResponse {
     pub role: String,
     pub content: String,
     pub thinking: String,
@@ -54,10 +54,10 @@ struct Metrics {
 }
 
 #[derive(Debug, Serialize)]
-struct PromptResponse {
+struct ChatResponse {
     pub model: String,
     pub create_at: String,
-    pub message: MessageResponse,
+    pub message: ChatMessageResponse,
     pub done_reason: String,
     pub metrics: Metrics,
 }
@@ -66,7 +66,7 @@ impl http::Server for Component {
     fn handle(
         mut request: http::IncomingRequest,
     ) -> http::Result<http::Response<impl http::OutgoingBody>> {
-        let body = match request.read_body_json::<PromptRequest>() {
+        let body = match request.read_body_json::<ChatRequest>() {
             Ok(value) => value,
             Err(err) => {
                 error!("Failed to deserialize request body: {err}");
@@ -78,12 +78,12 @@ impl http::Server for Component {
                 );
             }
         };
-        let response = wc::prompt(&yasp::giga::wc::PromptRequest {
+        let response = wc::chat(&yasp::giga::wc::ChatRequest {
             model: body.model,
             messages: body
                 .messages
                 .into_iter()
-                .map(|m| yasp::giga::wc::MessageRequest {
+                .map(|m| yasp::giga::wc::ChatMessageRequest {
                     role: m.role,
                     content: m.content,
                 })
@@ -92,10 +92,10 @@ impl http::Server for Component {
 
         make_response(
             http::StatusCode::OK,
-            &PromptResponse {
+            &ChatResponse {
                 model: response.model,
                 create_at: response.create_at,
-                message: MessageResponse {
+                message: ChatMessageResponse {
                     role: response.message.role,
                     content: response.message.content,
                     thinking: response.message.thinking,
