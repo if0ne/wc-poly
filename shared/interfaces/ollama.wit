@@ -1,39 +1,5 @@
 package yasp:llm;
 
 interface ollama {
-    chat: func(req: chat-request) -> chat-response;
-
-    record chat-message-request {
-        role: string,
-        content: string,
-    }
-
-    record chat-request {
-        model: string,
-        messages: list<chat-message-request>
-    }
-
-    record metrics {
-        total: u64,
-        load: u64,
-        prompt-eval-count: u32,
-        prompt-eval-duration: u64,
-        eval-count: u32,
-        eval-duration: u64,
-    }
-
-    record chat-message-response {
-        role: string,
-        content: string,
-        thinking: string,
-        images: list<list<u8>>,
-    }
-
-    record chat-response {
-        model: string,
-        create-at: string,
-        message: chat-message-response,
-        done-reason: string,
-        metrics: metrics
-    }
+    chat: func(json: string) -> string;
 }

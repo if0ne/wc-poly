@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use wasmcloud_component::{
     error,
     http::{self, Method},
@@ -6,47 +5,8 @@ use wasmcloud_component::{
 
 use crate::{
     bindings::yasp::llm::ollama,
-    utils::{make_empty_response, make_response, IncomingRequestExt},
+    utils::{make_empty_response, make_response, make_response_from_string, IncomingRequestExt},
 };
-
-#[derive(Debug, Deserialize)]
-struct MessageRequest {
-    pub role: String,
-    pub content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Request {
-    pub model: String,
-    pub messages: Vec<MessageRequest>,
-}
-
-#[derive(Debug, Serialize)]
-struct MessageResponse {
-    pub role: String,
-    pub content: String,
-    pub thinking: String,
-    pub images: Vec<Vec<u8>>,
-}
-
-#[derive(Debug, Serialize)]
-struct Metrics {
-    pub total: u64,
-    pub load: u64,
-    pub prompt_eval_count: u32,
-    pub prompt_eval_duration: u64,
-    pub eval_count: u32,
-    pub eval_duration: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct Response {
-    pub model: String,
-    pub create_at: String,
-    pub message: MessageResponse,
-    pub done_reason: String,
-    pub metrics: Metrics,
-}
 
 pub fn chat(mut request: http::IncomingRequest) -> http::Result<http::Response<String>> {
     if request.method() != Method::POST {
@@ -57,10 +17,10 @@ pub fn chat(mut request: http::IncomingRequest) -> http::Result<http::Response<S
         return make_empty_response(http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
 
-    let body = match request.read_body_json::<Request>() {
+    let body = match request.read_body_string() {
         Ok(value) => value,
         Err(err) => {
-            error!("Failed to deserialize request body: {err}");
+            error!("Failed to read request body: {err}");
             return make_response(
                 http::StatusCode::BAD_REQUEST,
                 &serde_json::json!({
@@ -70,38 +30,7 @@ pub fn chat(mut request: http::IncomingRequest) -> http::Result<http::Response<S
         }
     };
 
-    let response = ollama::chat(&ollama::ChatRequest {
-        model: body.model,
-        messages: body
-            .messages
-            .into_iter()
-            .map(|m| ollama::ChatMessageRequest {
-                role: m.role,
-                content: m.content,
-            })
-            .collect(),
-    });
+    let response = ollama::chat(&body);
 
-    make_response(
-        http::StatusCode::OK,
-        &Response {
-            model: response.model,
-            create_at: response.create_at,
-            message: MessageResponse {
-                role: response.message.role,
-                content: response.message.content,
-                thinking: response.message.thinking,
-                images: response.message.images,
-            },
-            done_reason: response.done_reason,
-            metrics: Metrics {
-                total: response.metrics.total,
-                load: response.metrics.load,
-                prompt_eval_count: response.metrics.prompt_eval_count,
-                prompt_eval_duration: response.metrics.prompt_eval_duration,
-                eval_count: response.metrics.eval_count,
-                eval_duration: response.metrics.eval_duration,
-            },
-        },
-    )
+    make_response_from_string(http::StatusCode::OK, response)
 }

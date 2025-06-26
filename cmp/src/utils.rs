@@ -7,6 +7,7 @@ pub trait IncomingRequestExt {
     fn has_json_content_type(&self) -> bool;
 
     fn read_body_json<T: DeserializeOwned>(&mut self) -> anyhow::Result<T>;
+    fn read_body_string(&mut self) -> anyhow::Result<String>;
 }
 
 impl IncomingRequestExt for http::IncomingRequest {
@@ -33,6 +34,22 @@ impl IncomingRequestExt for http::IncomingRequest {
         serde_json::from_slice::<T>(&buf)
             .map_err(|e| anyhow::anyhow!("failed to decode request body: {e}"))
     }
+
+    fn read_body_string(&mut self) -> anyhow::Result<String> {
+        let content_length = self
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(64);
+
+        let body = self.body_mut();
+
+        let mut buffer = String::with_capacity(content_length);
+        let _ = body.read_to_string(&mut buffer)?;
+
+        Ok(buffer)
+    }
 }
 
 pub fn make_response<T: Serialize + ?Sized>(
@@ -42,6 +59,20 @@ pub fn make_response<T: Serialize + ?Sized>(
     let body = serde_json::to_string(body)
         .map_err(|e| http::ErrorCode::InternalError(Some(format!("failed to deserialize: {e}"))))?;
 
+    http::Response::builder()
+        .status(code)
+        .header(
+            http::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )
+        .body(body)
+        .map_err(|e| http::ErrorCode::InternalError(Some(format!("failed to build response: {e}"))))
+}
+
+pub fn make_response_from_string(
+    code: http::StatusCode,
+    body: String,
+) -> http::Result<http::Response<String>> {
     http::Response::builder()
         .status(code)
         .header(
