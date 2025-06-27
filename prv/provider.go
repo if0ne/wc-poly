@@ -6,16 +6,12 @@ import (
 	"fmt"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/openai"
 	sdk "go.wasmcloud.dev/provider"
 )
 
-type OllamaAdaptor interface {
-	Chat(context.Context, *api.ChatRequest, api.ChatResponseFunc) error
-	Pull(context.Context, *api.PullRequest, api.PullProgressFunc) error
-}
-
 type Handler struct {
-	client     OllamaAdaptor
+	client     *Client
 	provider   *sdk.WasmcloudProvider
 	linkedFrom map[string]map[string]string
 	linkedTo   map[string]map[string]string
@@ -24,7 +20,7 @@ type Handler struct {
 func (h *Handler) Chat(ctx context.Context, req string) (string, error) {
 	h.provider.Logger.Info("Got raw request", "req", req)
 
-	var input api.ChatRequest
+	var input openai.ChatCompletionRequest
 
 	json.Valid([]byte(req))
 
@@ -43,8 +39,8 @@ func (h *Handler) Chat(ctx context.Context, req string) (string, error) {
 		return "", fmt.Errorf("failed to pull model: %w", err)
 	}
 
-	var response api.ChatResponse
-	fn := func(oresponse api.ChatResponse) error {
+	var response openai.ChatCompletion
+	fn := func(oresponse openai.ChatCompletion) error {
 		response = oresponse
 		return nil
 	}

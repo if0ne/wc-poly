@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/cmd"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
@@ -53,7 +52,7 @@ func main() {
 }
 
 func run() error {
-	client, err := api.ClientFromEnvironment()
+	client, err := ClientFromEnvironment()
 	if err != nil {
 		return err
 	}
