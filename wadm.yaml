@@ -20,6 +20,7 @@ spec:
         - type: spreadscaler
           properties:
             instances: 1
+
         - type: link
           properties:
             target: prv
@@ -27,20 +28,25 @@ spec:
             package: llm
             interfaces: [ollama]
 
-    - name: httpserver
+        - type: link
+          properties:
+            target: messaging-nats
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [consumer]
+
+    - name: messaging-nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.27.0
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
       traits:
         - type: link
           properties:
-            target:
-              name: cmp
-            namespace: wasi
-            package: http
-            interfaces: [incoming-handler]
-            source:
-              config:
-                - name: default-http
-                  properties:
-                    address: 0.0.0.0:8000
+            target: cmp
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            source_config:
+              - name: sub.api
+                properties:
+                  subscriptions: yasp.boring.api.*

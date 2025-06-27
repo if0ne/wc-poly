@@ -2,6 +2,7 @@ package yasp:handler;
 
 world cmp {
     import yasp:llm/ollama;
+    import wasmcloud:messaging/consumer@0.2.0;
 
-    export wasi:http/incoming-handler@0.2.2;
+    export wasmcloud:messaging/handler@0.2.0;
 }
