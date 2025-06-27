@@ -6,6 +6,7 @@ COMPONENTS = cmp prv
 all: build deploy
 
 clean:
+	wash app undeploy wadm.yaml
 	wash app delete wadm.yaml
 
 build:

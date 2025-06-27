@@ -15,11 +15,14 @@ import (
 )
 
 type Handler interface {
-	Chat(ctx__ context.Context, json string) (string, error)
+	Chat(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
+	Pull(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
+	Delete(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
+	ModelList(ctx__ context.Context) (*wrpc.Result[string, string], error)
 }
 
 func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
-	stops := make([]func() error, 0, 1)
+	stops := make([]func() error, 0, 4)
 	stop = func() error {
 		for _, stop := range stops {
 			if err := stop(); err != nil {
@@ -96,26 +99,85 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		var buf bytes.Buffer
 		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
 
-		write0, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
-			n := len(v)
-			if n > math.MaxUint32 {
-				return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+		write0, err := func(v *wrpc.Result[string, string], w interface {
+			io.ByteWriter
+			io.Writer
+		}) (func(wrpc.IndexWriter) error, error) {
+			switch {
+			case v.Ok == nil && v.Err == nil:
+				return nil, errors.New("both result variants cannot be nil")
+			case v.Ok != nil && v.Err != nil:
+				return nil, errors.New("exactly one result variant must non-nil")
+
+			case v.Ok != nil:
+				slog.Debug("writing `result::ok` status byte")
+				if err := w.WriteByte(0); err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
+				}
+				slog.Debug("writing `result::ok` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Ok, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			default:
+				slog.Debug("writing `result::err` status byte")
+				if err := w.WriteByte(1); err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` status byte: %w", err)
+				}
+				slog.Debug("writing `result::err` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Err, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
 			}
-			if err = func(v int, w io.Writer) error {
-				b := make([]byte, binary.MaxVarintLen32)
-				i := binary.PutUvarint(b, uint64(v))
-				slog.Debug("writing string byte length", "len", n)
-				_, err = w.Write(b[:i])
-				return err
-			}(n, w); err != nil {
-				return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
-			}
-			slog.Debug("writing string bytes")
-			_, err = w.Write([]byte(v))
-			if err != nil {
-				return fmt.Errorf("failed to write string bytes: %w", err)
-			}
-			return nil
 		}(r0, &buf)
 		if err != nil {
 			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:llm/ollama", "name", "chat", "err", err)
@@ -154,5 +216,512 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		return nil, fmt.Errorf("failed to serve `yasp:llm/ollama.chat`: %w", err)
 	}
 	stops = append(stops, stop0)
+
+	stop1, err := s.Serve("yasp:llm/ollama", "pull", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+		defer func() {
+			if err := w.Close(); err != nil {
+				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			}
+		}()
+		slog.DebugContext(ctx, "reading parameter", "i", 0)
+		p0, err := func(r interface {
+			io.ByteReader
+			io.Reader
+		}) (string, error) {
+			var x uint32
+			var s uint8
+			for i := 0; i < 5; i++ {
+				slog.Debug("reading string length byte", "i", i)
+				b, err := r.ReadByte()
+				if err != nil {
+					if i > 0 && err == io.EOF {
+						err = io.ErrUnexpectedEOF
+					}
+					return "", fmt.Errorf("failed to read string length byte: %w", err)
+				}
+				if s == 28 && b > 0x0f {
+					return "", errors.New("string length overflows a 32-bit integer")
+				}
+				if b < 0x80 {
+					x = x | uint32(b)<<s
+					if x == 0 {
+						return "", nil
+					}
+					buf := make([]byte, x)
+					slog.Debug("reading string bytes", "len", x)
+					_, err = r.Read(buf)
+					if err != nil {
+						return "", fmt.Errorf("failed to read string bytes: %w", err)
+					}
+					if !utf8.Valid(buf) {
+						return string(buf), errors.New("string is not valid UTF-8")
+					}
+					return string(buf), nil
+				}
+				x |= uint32(b&0x7f) << s
+				s += 7
+			}
+			return "", errors.New("string length overflows a 32-bit integer")
+		}(r)
+
+		if err != nil {
+			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			if err := r.Close(); err != nil {
+				slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			}
+			return
+		}
+		slog.DebugContext(ctx, "calling `yasp:llm/ollama.pull` handler")
+		r0, err := h.Pull(ctx, p0)
+		if cErr := r.Close(); cErr != nil {
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			return
+		}
+
+		var buf bytes.Buffer
+		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
+
+		write0, err := func(v *wrpc.Result[string, string], w interface {
+			io.ByteWriter
+			io.Writer
+		}) (func(wrpc.IndexWriter) error, error) {
+			switch {
+			case v.Ok == nil && v.Err == nil:
+				return nil, errors.New("both result variants cannot be nil")
+			case v.Ok != nil && v.Err != nil:
+				return nil, errors.New("exactly one result variant must non-nil")
+
+			case v.Ok != nil:
+				slog.Debug("writing `result::ok` status byte")
+				if err := w.WriteByte(0); err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
+				}
+				slog.Debug("writing `result::ok` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Ok, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			default:
+				slog.Debug("writing `result::err` status byte")
+				if err := w.WriteByte(1); err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` status byte: %w", err)
+				}
+				slog.Debug("writing `result::err` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Err, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			}
+		}(r0, &buf)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			return
+		}
+		if write0 != nil {
+			writes[0] = write0
+		}
+		slog.DebugContext(ctx, "transmitting `yasp:llm/ollama.pull` result")
+		_, err = w.Write(buf.Bytes())
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+			return
+		}
+		if len(writes) > 0 {
+			for index, write := range writes {
+				_ = write
+				switch index {
+				case 0:
+					w, err := w.Index(0)
+					if err != nil {
+						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+						return
+					}
+					write := write
+					go func() {
+						if err := write(w); err != nil {
+							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:llm/ollama", "name", "pull", "err", err)
+						}
+					}()
+				}
+			}
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to serve `yasp:llm/ollama.pull`: %w", err)
+	}
+	stops = append(stops, stop1)
+
+	stop2, err := s.Serve("yasp:llm/ollama", "delete", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+		defer func() {
+			if err := w.Close(); err != nil {
+				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			}
+		}()
+		slog.DebugContext(ctx, "reading parameter", "i", 0)
+		p0, err := func(r interface {
+			io.ByteReader
+			io.Reader
+		}) (string, error) {
+			var x uint32
+			var s uint8
+			for i := 0; i < 5; i++ {
+				slog.Debug("reading string length byte", "i", i)
+				b, err := r.ReadByte()
+				if err != nil {
+					if i > 0 && err == io.EOF {
+						err = io.ErrUnexpectedEOF
+					}
+					return "", fmt.Errorf("failed to read string length byte: %w", err)
+				}
+				if s == 28 && b > 0x0f {
+					return "", errors.New("string length overflows a 32-bit integer")
+				}
+				if b < 0x80 {
+					x = x | uint32(b)<<s
+					if x == 0 {
+						return "", nil
+					}
+					buf := make([]byte, x)
+					slog.Debug("reading string bytes", "len", x)
+					_, err = r.Read(buf)
+					if err != nil {
+						return "", fmt.Errorf("failed to read string bytes: %w", err)
+					}
+					if !utf8.Valid(buf) {
+						return string(buf), errors.New("string is not valid UTF-8")
+					}
+					return string(buf), nil
+				}
+				x |= uint32(b&0x7f) << s
+				s += 7
+			}
+			return "", errors.New("string length overflows a 32-bit integer")
+		}(r)
+
+		if err != nil {
+			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			if err := r.Close(); err != nil {
+				slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			}
+			return
+		}
+		slog.DebugContext(ctx, "calling `yasp:llm/ollama.delete` handler")
+		r0, err := h.Delete(ctx, p0)
+		if cErr := r.Close(); cErr != nil {
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			return
+		}
+
+		var buf bytes.Buffer
+		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
+
+		write0, err := func(v *wrpc.Result[string, string], w interface {
+			io.ByteWriter
+			io.Writer
+		}) (func(wrpc.IndexWriter) error, error) {
+			switch {
+			case v.Ok == nil && v.Err == nil:
+				return nil, errors.New("both result variants cannot be nil")
+			case v.Ok != nil && v.Err != nil:
+				return nil, errors.New("exactly one result variant must non-nil")
+
+			case v.Ok != nil:
+				slog.Debug("writing `result::ok` status byte")
+				if err := w.WriteByte(0); err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
+				}
+				slog.Debug("writing `result::ok` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Ok, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			default:
+				slog.Debug("writing `result::err` status byte")
+				if err := w.WriteByte(1); err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` status byte: %w", err)
+				}
+				slog.Debug("writing `result::err` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Err, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			}
+		}(r0, &buf)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			return
+		}
+		if write0 != nil {
+			writes[0] = write0
+		}
+		slog.DebugContext(ctx, "transmitting `yasp:llm/ollama.delete` result")
+		_, err = w.Write(buf.Bytes())
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+			return
+		}
+		if len(writes) > 0 {
+			for index, write := range writes {
+				_ = write
+				switch index {
+				case 0:
+					w, err := w.Index(0)
+					if err != nil {
+						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+						return
+					}
+					write := write
+					go func() {
+						if err := write(w); err != nil {
+							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:llm/ollama", "name", "delete", "err", err)
+						}
+					}()
+				}
+			}
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to serve `yasp:llm/ollama.delete`: %w", err)
+	}
+	stops = append(stops, stop2)
+
+	stop3, err := s.Serve("yasp:llm/ollama", "model-list", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+		defer func() {
+			if err := w.Close(); err != nil {
+				slog.DebugContext(ctx, "failed to close writer", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+			}
+		}()
+		slog.DebugContext(ctx, "calling `yasp:llm/ollama.model-list` handler")
+		r0, err := h.ModelList(ctx)
+		if cErr := r.Close(); cErr != nil {
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+			return
+		}
+
+		var buf bytes.Buffer
+		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
+
+		write0, err := func(v *wrpc.Result[string, string], w interface {
+			io.ByteWriter
+			io.Writer
+		}) (func(wrpc.IndexWriter) error, error) {
+			switch {
+			case v.Ok == nil && v.Err == nil:
+				return nil, errors.New("both result variants cannot be nil")
+			case v.Ok != nil && v.Err != nil:
+				return nil, errors.New("exactly one result variant must non-nil")
+
+			case v.Ok != nil:
+				slog.Debug("writing `result::ok` status byte")
+				if err := w.WriteByte(0); err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
+				}
+				slog.Debug("writing `result::ok` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Ok, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			default:
+				slog.Debug("writing `result::err` status byte")
+				if err := w.WriteByte(1); err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` status byte: %w", err)
+				}
+				slog.Debug("writing `result::err` payload")
+				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+					n := len(v)
+					if n > math.MaxUint32 {
+						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+					}
+					if err = func(v int, w io.Writer) error {
+						b := make([]byte, binary.MaxVarintLen32)
+						i := binary.PutUvarint(b, uint64(v))
+						slog.Debug("writing string byte length", "len", n)
+						_, err = w.Write(b[:i])
+						return err
+					}(n, w); err != nil {
+						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+					}
+					slog.Debug("writing string bytes")
+					_, err = w.Write([]byte(v))
+					if err != nil {
+						return fmt.Errorf("failed to write string bytes: %w", err)
+					}
+					return nil
+				}(*v.Err, w)
+				if err != nil {
+					return nil, fmt.Errorf("failed to write `result::err` payload: %w", err)
+				}
+				if write != nil {
+					return write, nil
+				}
+				return nil, nil
+			}
+		}(r0, &buf)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+			return
+		}
+		if write0 != nil {
+			writes[0] = write0
+		}
+		slog.DebugContext(ctx, "transmitting `yasp:llm/ollama.model-list` result")
+		_, err = w.Write(buf.Bytes())
+		if err != nil {
+			slog.WarnContext(ctx, "failed to write result", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+			return
+		}
+		if len(writes) > 0 {
+			for index, write := range writes {
+				_ = write
+				switch index {
+				case 0:
+					w, err := w.Index(0)
+					if err != nil {
+						slog.ErrorContext(ctx, "failed to index result writer", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+						return
+					}
+					write := write
+					go func() {
+						if err := write(w); err != nil {
+							slog.WarnContext(ctx, "failed to write nested result value", "instance", "yasp:llm/ollama", "name", "model-list", "err", err)
+						}
+					}()
+				}
+			}
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to serve `yasp:llm/ollama.model-list`: %w", err)
+	}
+	stops = append(stops, stop3)
 	return stop, nil
 }

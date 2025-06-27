@@ -10,7 +10,7 @@ mod bindings {
 
     wasmcloud_component::http::export!(Component);
 }
-mod chat;
+mod api;
 mod utils;
 
 use wasmcloud_component::http;
@@ -24,7 +24,10 @@ impl http::Server for Component {
         request: http::IncomingRequest,
     ) -> http::Result<http::Response<impl http::OutgoingBody>> {
         match request.uri().path() {
-            "/api/chat" => chat::chat(request),
+            "/api/chat" => api::chat(request),
+            "/api/list" => api::list(request),
+            "/api/pull" => api::pull(request),
+            "/api/delete" => api::delete(request),
             _ => make_empty_response(http::StatusCode::NOT_FOUND),
         }
     }

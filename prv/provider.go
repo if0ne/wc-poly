@@ -8,6 +8,7 @@ import (
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/openai"
 	sdk "go.wasmcloud.dev/provider"
+	wrpc "wrpc.io/go"
 )
 
 type Handler struct {
@@ -17,18 +18,12 @@ type Handler struct {
 	linkedTo   map[string]map[string]string
 }
 
-func (h *Handler) Chat(ctx context.Context, req string) (string, error) {
-	h.provider.Logger.Info("Got raw request", "req", req)
-
+func (h *Handler) Chat(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
 	var input openai.ChatCompletionRequest
 
-	json.Valid([]byte(req))
-
 	if err := json.Unmarshal([]byte(req), &input); err != nil {
-		return "", fmt.Errorf("invalid JSON input: %w", err)
+		return nil, fmt.Errorf("invalid JSON input: %w", err)
 	}
-
-	h.provider.Logger.Info("Got request", "input", input.Messages[0].Content)
 
 	pullReq := &api.PullRequest{Model: input.Model}
 	err := h.client.Pull(ctx, pullReq, func(status api.ProgressResponse) error {
@@ -36,7 +31,7 @@ func (h *Handler) Chat(ctx context.Context, req string) (string, error) {
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("failed to pull model: %w", err)
+		return wrpc.Err[string]("failed to pull model: " + err.Error()), nil
 	}
 
 	var response openai.ChatCompletion
@@ -48,13 +43,66 @@ func (h *Handler) Chat(ctx context.Context, req string) (string, error) {
 	err = h.client.Chat(ctx, &input, fn)
 
 	if err != nil {
-		return "", fmt.Errorf("chat failed: %w", err)
+		return wrpc.Err[string]("chat failed: " + err.Error()), nil
 	}
 
 	respBytes, err := json.Marshal(&response)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal response: %w", err)
+		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 
-	return string(respBytes), nil
+	return wrpc.Ok[string](string(respBytes)), nil
+}
+
+func (h *Handler) Pull(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
+	var input api.PullRequest
+
+	if err := json.Unmarshal([]byte(req), &input); err != nil {
+		return nil, fmt.Errorf("invalid JSON input: %w", err)
+	}
+
+	go func() {
+		err := h.client.Pull(ctx, &input, func(status api.ProgressResponse) error {
+			return nil
+		})
+
+		if err != nil {
+			h.provider.Logger.Error("failed to pull model", "error", err)
+		}
+
+		h.provider.Logger.Info("model successfully downloaded", "Model name", input.Model)
+	}()
+
+	return wrpc.Ok[string](string("{}")), nil
+}
+
+func (h *Handler) ModelList(ctx context.Context) (*wrpc.Result[string, string], error) {
+	response, err := h.client.List(ctx)
+
+	if err != nil {
+		return wrpc.Err[string]("failed to get list: " + err.Error()), nil
+	}
+
+	respBytes, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return wrpc.Ok[string](string(respBytes)), nil
+}
+
+func (h *Handler) Delete(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
+	var input api.DeleteRequest
+
+	if err := json.Unmarshal([]byte(req), &input); err != nil {
+		return nil, fmt.Errorf("invalid JSON input: %w", err)
+	}
+
+	err := h.client.Delete(ctx, &input)
+
+	if err != nil {
+		return wrpc.Err[string]("delete failed:" + err.Error()), nil
+	}
+
+	return wrpc.Ok[string](string("{}")), nil
 }

@@ -286,3 +286,20 @@ func (c *Client) Pull(ctx context.Context, req *api.PullRequest, fn PullProgress
 		return fn(resp)
 	})
 }
+
+// List lists models that are available locally.
+func (c *Client) List(ctx context.Context) (*api.ListResponse, error) {
+	var lr api.ListResponse
+	if err := c.do(ctx, http.MethodGet, "/api/tags", nil, &lr); err != nil {
+		return nil, err
+	}
+	return &lr, nil
+}
+
+// Delete deletes a model and its data.
+func (c *Client) Delete(ctx context.Context, req *api.DeleteRequest) error {
+	if err := c.do(ctx, http.MethodDelete, "/api/delete", req, nil); err != nil {
+		return err
+	}
+	return nil
+}
