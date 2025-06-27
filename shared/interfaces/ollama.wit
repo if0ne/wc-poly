@@ -1,8 +1,8 @@
 package yasp:llm;
 
 interface ollama {
-    chat: func(json: string) -> result<string, string>;
-    pull: func(json: string) -> result<string, string>;
-    delete: func(json: string) -> result<string, string>;
-    model-list: func() -> result<string, string>;
+    chat: func(json: list<u8>) -> result<list<u8>, string>;
+    pull: func(json: list<u8>) -> result<list<u8>, string>;
+    delete: func(json: list<u8>) -> result<list<u8>, string>;
+    model-list: func() -> result<list<u8>, string>;
 }

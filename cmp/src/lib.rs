@@ -20,25 +20,16 @@ struct Component;
 impl Guest for Component {
     fn handle_message(msg: BrokerMessage) -> Result<(), String> {
         let result = match msg.subject.split('.').skip(3).next().unwrap() {
-            "chat" => {
-                let body = String::from_utf8_lossy(&msg.body);
-                ollama::chat(&body)
-            }
+            "chat" => ollama::chat(&msg.body),
             "list" => ollama::model_list(),
-            "pull" => {
-                let body = String::from_utf8_lossy(&msg.body);
-                ollama::pull(&body)
-            }
-            "delete" => {
-                let body = String::from_utf8_lossy(&msg.body);
-                ollama::delete(&body)
-            }
+            "pull" => ollama::pull(&msg.body),
+            "delete" => ollama::delete(&msg.body),
             _ => Err("unknown api".to_string()),
         };
 
         if let Some(reply) = msg.reply_to {
             let body = match result {
-                Ok(body) => body.into_bytes(),
+                Ok(body) => body,
                 Err(err) => serde_json::to_vec(&serde_json::json!({
                     "error": err
                 }))

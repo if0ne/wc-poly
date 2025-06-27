@@ -18,10 +18,10 @@ type Handler struct {
 	linkedTo   map[string]map[string]string
 }
 
-func (h *Handler) Chat(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
+func (h *Handler) Chat(ctx context.Context, req []uint8) (*wrpc.Result[[]uint8, string], error) {
 	var input openai.ChatCompletionRequest
 
-	if err := json.Unmarshal([]byte(req), &input); err != nil {
+	if err := json.Unmarshal(req, &input); err != nil {
 		return nil, fmt.Errorf("invalid JSON input: %w", err)
 	}
 
@@ -31,7 +31,7 @@ func (h *Handler) Chat(ctx context.Context, req string) (*wrpc.Result[string, st
 	})
 
 	if err != nil {
-		return wrpc.Err[string]("failed to pull model: " + err.Error()), nil
+		return wrpc.Err[[]uint8]("failed to pull model: " + err.Error()), nil
 	}
 
 	var response openai.ChatCompletion
@@ -43,7 +43,7 @@ func (h *Handler) Chat(ctx context.Context, req string) (*wrpc.Result[string, st
 	err = h.client.Chat(ctx, &input, fn)
 
 	if err != nil {
-		return wrpc.Err[string]("chat failed: " + err.Error()), nil
+		return wrpc.Err[[]uint8]("chat failed: " + err.Error()), nil
 	}
 
 	respBytes, err := json.Marshal(&response)
@@ -51,13 +51,13 @@ func (h *Handler) Chat(ctx context.Context, req string) (*wrpc.Result[string, st
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 
-	return wrpc.Ok[string](string(respBytes)), nil
+	return wrpc.Ok[string](respBytes), nil
 }
 
-func (h *Handler) Pull(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
+func (h *Handler) Pull(ctx context.Context, req []uint8) (*wrpc.Result[[]uint8, string], error) {
 	var input api.PullRequest
 
-	if err := json.Unmarshal([]byte(req), &input); err != nil {
+	if err := json.Unmarshal(req, &input); err != nil {
 		return nil, fmt.Errorf("invalid JSON input: %w", err)
 	}
 
@@ -73,14 +73,14 @@ func (h *Handler) Pull(ctx context.Context, req string) (*wrpc.Result[string, st
 		h.provider.Logger.Info("model successfully downloaded", "Model name", input.Model)
 	}()
 
-	return wrpc.Ok[string](string("{}")), nil
+	return wrpc.Ok[string]([]uint8("{}")), nil
 }
 
-func (h *Handler) ModelList(ctx context.Context) (*wrpc.Result[string, string], error) {
+func (h *Handler) ModelList(ctx context.Context) (*wrpc.Result[[]uint8, string], error) {
 	response, err := h.client.List(ctx)
 
 	if err != nil {
-		return wrpc.Err[string]("failed to get list: " + err.Error()), nil
+		return wrpc.Err[[]uint8]("failed to get list: " + err.Error()), nil
 	}
 
 	respBytes, err := json.Marshal(response)
@@ -88,21 +88,21 @@ func (h *Handler) ModelList(ctx context.Context) (*wrpc.Result[string, string], 
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 
-	return wrpc.Ok[string](string(respBytes)), nil
+	return wrpc.Ok[string]([]uint8(respBytes)), nil
 }
 
-func (h *Handler) Delete(ctx context.Context, req string) (*wrpc.Result[string, string], error) {
+func (h *Handler) Delete(ctx context.Context, req []uint8) (*wrpc.Result[[]uint8, string], error) {
 	var input api.DeleteRequest
 
-	if err := json.Unmarshal([]byte(req), &input); err != nil {
+	if err := json.Unmarshal(req, &input); err != nil {
 		return nil, fmt.Errorf("invalid JSON input: %w", err)
 	}
 
 	err := h.client.Delete(ctx, &input)
 
 	if err != nil {
-		return wrpc.Err[string]("delete failed:" + err.Error()), nil
+		return wrpc.Err[[]uint8]("delete failed:" + err.Error()), nil
 	}
 
-	return wrpc.Ok[string](string("{}")), nil
+	return wrpc.Ok[string]([]uint8("{}")), nil
 }

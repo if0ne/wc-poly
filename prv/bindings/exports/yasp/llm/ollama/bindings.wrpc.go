@@ -10,15 +10,16 @@ import (
 	io "io"
 	slog "log/slog"
 	math "math"
-	utf8 "unicode/utf8"
+	sync "sync"
+	atomic "sync/atomic"
 	wrpc "wrpc.io/go"
 )
 
 type Handler interface {
-	Chat(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
-	Pull(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
-	Delete(ctx__ context.Context, json string) (*wrpc.Result[string, string], error)
-	ModelList(ctx__ context.Context) (*wrpc.Result[string, string], error)
+	Chat(ctx__ context.Context, json []uint8) (*wrpc.Result[[]uint8, string], error)
+	Pull(ctx__ context.Context, json []uint8) (*wrpc.Result[[]uint8, string], error)
+	Delete(ctx__ context.Context, json []uint8) (*wrpc.Result[[]uint8, string], error)
+	ModelList(ctx__ context.Context) (*wrpc.Result[[]uint8, string], error)
 }
 
 func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
@@ -42,41 +43,38 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		p0, err := func(r interface {
 			io.ByteReader
 			io.Reader
-		}) (string, error) {
+		}) ([]byte, error) {
 			var x uint32
-			var s uint8
+			var s uint
 			for i := 0; i < 5; i++ {
-				slog.Debug("reading string length byte", "i", i)
+				slog.Debug("reading byte list length", "i", i)
 				b, err := r.ReadByte()
 				if err != nil {
 					if i > 0 && err == io.EOF {
 						err = io.ErrUnexpectedEOF
 					}
-					return "", fmt.Errorf("failed to read string length byte: %w", err)
+					return nil, fmt.Errorf("failed to read byte list length byte: %w", err)
 				}
 				if s == 28 && b > 0x0f {
-					return "", errors.New("string length overflows a 32-bit integer")
+					return nil, errors.New("byte list length overflows a 32-bit integer")
 				}
 				if b < 0x80 {
 					x = x | uint32(b)<<s
 					if x == 0 {
-						return "", nil
+						return nil, nil
 					}
 					buf := make([]byte, x)
-					slog.Debug("reading string bytes", "len", x)
-					_, err = r.Read(buf)
+					slog.Debug("reading byte list contents", "len", x)
+					_, err = io.ReadFull(r, buf)
 					if err != nil {
-						return "", fmt.Errorf("failed to read string bytes: %w", err)
+						return nil, fmt.Errorf("failed to read byte list contents: %w", err)
 					}
-					if !utf8.Valid(buf) {
-						return string(buf), errors.New("string is not valid UTF-8")
-					}
-					return string(buf), nil
+					return buf, nil
 				}
 				x |= uint32(b&0x7f) << s
 				s += 7
 			}
-			return "", errors.New("string length overflows a 32-bit integer")
+			return nil, errors.New("byte length overflows a 32-bit integer")
 		}(r)
 
 		if err != nil {
@@ -99,7 +97,7 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		var buf bytes.Buffer
 		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
 
-		write0, err := func(v *wrpc.Result[string, string], w interface {
+		write0, err := func(v *wrpc.Result[[]uint8, string], w interface {
 			io.ByteWriter
 			io.Writer
 		}) (func(wrpc.IndexWriter) error, error) {
@@ -115,26 +113,64 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
 				}
 				slog.Debug("writing `result::ok` payload")
-				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+				write, err := func(v []uint8, w interface {
+					io.ByteWriter
+					io.Writer
+				}) (write func(wrpc.IndexWriter) error, err error) {
 					n := len(v)
 					if n > math.MaxUint32 {
-						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+						return nil, fmt.Errorf("list length of %d overflows a 32-bit integer", n)
 					}
 					if err = func(v int, w io.Writer) error {
 						b := make([]byte, binary.MaxVarintLen32)
 						i := binary.PutUvarint(b, uint64(v))
-						slog.Debug("writing string byte length", "len", n)
+						slog.Debug("writing list length", "len", n)
 						_, err = w.Write(b[:i])
 						return err
 					}(n, w); err != nil {
-						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+						return nil, fmt.Errorf("failed to write list length of %d: %w", n, err)
 					}
-					slog.Debug("writing string bytes")
-					_, err = w.Write([]byte(v))
-					if err != nil {
-						return fmt.Errorf("failed to write string bytes: %w", err)
+					slog.Debug("writing list elements")
+					writes := make(map[uint32]func(wrpc.IndexWriter) error, n)
+					for i, e := range v {
+						write, err := (func(wrpc.IndexWriter) error)(nil), func(v uint8, w io.ByteWriter) error {
+							slog.Debug("writing u8 byte")
+							return w.WriteByte(v)
+						}(e, w)
+						if err != nil {
+							return nil, fmt.Errorf("failed to write list element %d: %w", i, err)
+						}
+						if write != nil {
+							writes[uint32(i)] = write
+						}
 					}
-					return nil
+					if len(writes) > 0 {
+						return func(w wrpc.IndexWriter) error {
+							var wg sync.WaitGroup
+							var wgErr atomic.Value
+							for index, write := range writes {
+								wg.Add(1)
+								w, err := w.Index(index)
+								if err != nil {
+									return fmt.Errorf("failed to index nested list writer: %w", err)
+								}
+								write := write
+								go func() {
+									defer wg.Done()
+									if err := write(w); err != nil {
+										wgErr.Store(err)
+									}
+								}()
+							}
+							wg.Wait()
+							err := wgErr.Load()
+							if err == nil {
+								return nil
+							}
+							return err.(error)
+						}, nil
+					}
+					return nil, nil
 				}(*v.Ok, w)
 				if err != nil {
 					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
@@ -227,41 +263,38 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		p0, err := func(r interface {
 			io.ByteReader
 			io.Reader
-		}) (string, error) {
+		}) ([]byte, error) {
 			var x uint32
-			var s uint8
+			var s uint
 			for i := 0; i < 5; i++ {
-				slog.Debug("reading string length byte", "i", i)
+				slog.Debug("reading byte list length", "i", i)
 				b, err := r.ReadByte()
 				if err != nil {
 					if i > 0 && err == io.EOF {
 						err = io.ErrUnexpectedEOF
 					}
-					return "", fmt.Errorf("failed to read string length byte: %w", err)
+					return nil, fmt.Errorf("failed to read byte list length byte: %w", err)
 				}
 				if s == 28 && b > 0x0f {
-					return "", errors.New("string length overflows a 32-bit integer")
+					return nil, errors.New("byte list length overflows a 32-bit integer")
 				}
 				if b < 0x80 {
 					x = x | uint32(b)<<s
 					if x == 0 {
-						return "", nil
+						return nil, nil
 					}
 					buf := make([]byte, x)
-					slog.Debug("reading string bytes", "len", x)
-					_, err = r.Read(buf)
+					slog.Debug("reading byte list contents", "len", x)
+					_, err = io.ReadFull(r, buf)
 					if err != nil {
-						return "", fmt.Errorf("failed to read string bytes: %w", err)
+						return nil, fmt.Errorf("failed to read byte list contents: %w", err)
 					}
-					if !utf8.Valid(buf) {
-						return string(buf), errors.New("string is not valid UTF-8")
-					}
-					return string(buf), nil
+					return buf, nil
 				}
 				x |= uint32(b&0x7f) << s
 				s += 7
 			}
-			return "", errors.New("string length overflows a 32-bit integer")
+			return nil, errors.New("byte length overflows a 32-bit integer")
 		}(r)
 
 		if err != nil {
@@ -284,7 +317,7 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		var buf bytes.Buffer
 		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
 
-		write0, err := func(v *wrpc.Result[string, string], w interface {
+		write0, err := func(v *wrpc.Result[[]uint8, string], w interface {
 			io.ByteWriter
 			io.Writer
 		}) (func(wrpc.IndexWriter) error, error) {
@@ -300,26 +333,64 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
 				}
 				slog.Debug("writing `result::ok` payload")
-				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+				write, err := func(v []uint8, w interface {
+					io.ByteWriter
+					io.Writer
+				}) (write func(wrpc.IndexWriter) error, err error) {
 					n := len(v)
 					if n > math.MaxUint32 {
-						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+						return nil, fmt.Errorf("list length of %d overflows a 32-bit integer", n)
 					}
 					if err = func(v int, w io.Writer) error {
 						b := make([]byte, binary.MaxVarintLen32)
 						i := binary.PutUvarint(b, uint64(v))
-						slog.Debug("writing string byte length", "len", n)
+						slog.Debug("writing list length", "len", n)
 						_, err = w.Write(b[:i])
 						return err
 					}(n, w); err != nil {
-						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+						return nil, fmt.Errorf("failed to write list length of %d: %w", n, err)
 					}
-					slog.Debug("writing string bytes")
-					_, err = w.Write([]byte(v))
-					if err != nil {
-						return fmt.Errorf("failed to write string bytes: %w", err)
+					slog.Debug("writing list elements")
+					writes := make(map[uint32]func(wrpc.IndexWriter) error, n)
+					for i, e := range v {
+						write, err := (func(wrpc.IndexWriter) error)(nil), func(v uint8, w io.ByteWriter) error {
+							slog.Debug("writing u8 byte")
+							return w.WriteByte(v)
+						}(e, w)
+						if err != nil {
+							return nil, fmt.Errorf("failed to write list element %d: %w", i, err)
+						}
+						if write != nil {
+							writes[uint32(i)] = write
+						}
 					}
-					return nil
+					if len(writes) > 0 {
+						return func(w wrpc.IndexWriter) error {
+							var wg sync.WaitGroup
+							var wgErr atomic.Value
+							for index, write := range writes {
+								wg.Add(1)
+								w, err := w.Index(index)
+								if err != nil {
+									return fmt.Errorf("failed to index nested list writer: %w", err)
+								}
+								write := write
+								go func() {
+									defer wg.Done()
+									if err := write(w); err != nil {
+										wgErr.Store(err)
+									}
+								}()
+							}
+							wg.Wait()
+							err := wgErr.Load()
+							if err == nil {
+								return nil
+							}
+							return err.(error)
+						}, nil
+					}
+					return nil, nil
 				}(*v.Ok, w)
 				if err != nil {
 					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
@@ -412,41 +483,38 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		p0, err := func(r interface {
 			io.ByteReader
 			io.Reader
-		}) (string, error) {
+		}) ([]byte, error) {
 			var x uint32
-			var s uint8
+			var s uint
 			for i := 0; i < 5; i++ {
-				slog.Debug("reading string length byte", "i", i)
+				slog.Debug("reading byte list length", "i", i)
 				b, err := r.ReadByte()
 				if err != nil {
 					if i > 0 && err == io.EOF {
 						err = io.ErrUnexpectedEOF
 					}
-					return "", fmt.Errorf("failed to read string length byte: %w", err)
+					return nil, fmt.Errorf("failed to read byte list length byte: %w", err)
 				}
 				if s == 28 && b > 0x0f {
-					return "", errors.New("string length overflows a 32-bit integer")
+					return nil, errors.New("byte list length overflows a 32-bit integer")
 				}
 				if b < 0x80 {
 					x = x | uint32(b)<<s
 					if x == 0 {
-						return "", nil
+						return nil, nil
 					}
 					buf := make([]byte, x)
-					slog.Debug("reading string bytes", "len", x)
-					_, err = r.Read(buf)
+					slog.Debug("reading byte list contents", "len", x)
+					_, err = io.ReadFull(r, buf)
 					if err != nil {
-						return "", fmt.Errorf("failed to read string bytes: %w", err)
+						return nil, fmt.Errorf("failed to read byte list contents: %w", err)
 					}
-					if !utf8.Valid(buf) {
-						return string(buf), errors.New("string is not valid UTF-8")
-					}
-					return string(buf), nil
+					return buf, nil
 				}
 				x |= uint32(b&0x7f) << s
 				s += 7
 			}
-			return "", errors.New("string length overflows a 32-bit integer")
+			return nil, errors.New("byte length overflows a 32-bit integer")
 		}(r)
 
 		if err != nil {
@@ -469,7 +537,7 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		var buf bytes.Buffer
 		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
 
-		write0, err := func(v *wrpc.Result[string, string], w interface {
+		write0, err := func(v *wrpc.Result[[]uint8, string], w interface {
 			io.ByteWriter
 			io.Writer
 		}) (func(wrpc.IndexWriter) error, error) {
@@ -485,26 +553,64 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
 				}
 				slog.Debug("writing `result::ok` payload")
-				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+				write, err := func(v []uint8, w interface {
+					io.ByteWriter
+					io.Writer
+				}) (write func(wrpc.IndexWriter) error, err error) {
 					n := len(v)
 					if n > math.MaxUint32 {
-						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+						return nil, fmt.Errorf("list length of %d overflows a 32-bit integer", n)
 					}
 					if err = func(v int, w io.Writer) error {
 						b := make([]byte, binary.MaxVarintLen32)
 						i := binary.PutUvarint(b, uint64(v))
-						slog.Debug("writing string byte length", "len", n)
+						slog.Debug("writing list length", "len", n)
 						_, err = w.Write(b[:i])
 						return err
 					}(n, w); err != nil {
-						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+						return nil, fmt.Errorf("failed to write list length of %d: %w", n, err)
 					}
-					slog.Debug("writing string bytes")
-					_, err = w.Write([]byte(v))
-					if err != nil {
-						return fmt.Errorf("failed to write string bytes: %w", err)
+					slog.Debug("writing list elements")
+					writes := make(map[uint32]func(wrpc.IndexWriter) error, n)
+					for i, e := range v {
+						write, err := (func(wrpc.IndexWriter) error)(nil), func(v uint8, w io.ByteWriter) error {
+							slog.Debug("writing u8 byte")
+							return w.WriteByte(v)
+						}(e, w)
+						if err != nil {
+							return nil, fmt.Errorf("failed to write list element %d: %w", i, err)
+						}
+						if write != nil {
+							writes[uint32(i)] = write
+						}
 					}
-					return nil
+					if len(writes) > 0 {
+						return func(w wrpc.IndexWriter) error {
+							var wg sync.WaitGroup
+							var wgErr atomic.Value
+							for index, write := range writes {
+								wg.Add(1)
+								w, err := w.Index(index)
+								if err != nil {
+									return fmt.Errorf("failed to index nested list writer: %w", err)
+								}
+								write := write
+								go func() {
+									defer wg.Done()
+									if err := write(w); err != nil {
+										wgErr.Store(err)
+									}
+								}()
+							}
+							wg.Wait()
+							err := wgErr.Load()
+							if err == nil {
+								return nil
+							}
+							return err.(error)
+						}, nil
+					}
+					return nil, nil
 				}(*v.Ok, w)
 				if err != nil {
 					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
@@ -606,7 +712,7 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		var buf bytes.Buffer
 		writes := make(map[uint32]func(wrpc.IndexWriter) error, 1)
 
-		write0, err := func(v *wrpc.Result[string, string], w interface {
+		write0, err := func(v *wrpc.Result[[]uint8, string], w interface {
 			io.ByteWriter
 			io.Writer
 		}) (func(wrpc.IndexWriter) error, error) {
@@ -622,26 +728,64 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 					return nil, fmt.Errorf("failed to write `result::ok` status byte: %w", err)
 				}
 				slog.Debug("writing `result::ok` payload")
-				write, err := (func(wrpc.IndexWriter) error)(nil), func(v string, w io.Writer) (err error) {
+				write, err := func(v []uint8, w interface {
+					io.ByteWriter
+					io.Writer
+				}) (write func(wrpc.IndexWriter) error, err error) {
 					n := len(v)
 					if n > math.MaxUint32 {
-						return fmt.Errorf("string byte length of %d overflows a 32-bit integer", n)
+						return nil, fmt.Errorf("list length of %d overflows a 32-bit integer", n)
 					}
 					if err = func(v int, w io.Writer) error {
 						b := make([]byte, binary.MaxVarintLen32)
 						i := binary.PutUvarint(b, uint64(v))
-						slog.Debug("writing string byte length", "len", n)
+						slog.Debug("writing list length", "len", n)
 						_, err = w.Write(b[:i])
 						return err
 					}(n, w); err != nil {
-						return fmt.Errorf("failed to write string byte length of %d: %w", n, err)
+						return nil, fmt.Errorf("failed to write list length of %d: %w", n, err)
 					}
-					slog.Debug("writing string bytes")
-					_, err = w.Write([]byte(v))
-					if err != nil {
-						return fmt.Errorf("failed to write string bytes: %w", err)
+					slog.Debug("writing list elements")
+					writes := make(map[uint32]func(wrpc.IndexWriter) error, n)
+					for i, e := range v {
+						write, err := (func(wrpc.IndexWriter) error)(nil), func(v uint8, w io.ByteWriter) error {
+							slog.Debug("writing u8 byte")
+							return w.WriteByte(v)
+						}(e, w)
+						if err != nil {
+							return nil, fmt.Errorf("failed to write list element %d: %w", i, err)
+						}
+						if write != nil {
+							writes[uint32(i)] = write
+						}
 					}
-					return nil
+					if len(writes) > 0 {
+						return func(w wrpc.IndexWriter) error {
+							var wg sync.WaitGroup
+							var wgErr atomic.Value
+							for index, write := range writes {
+								wg.Add(1)
+								w, err := w.Index(index)
+								if err != nil {
+									return fmt.Errorf("failed to index nested list writer: %w", err)
+								}
+								write := write
+								go func() {
+									defer wg.Done()
+									if err := write(w); err != nil {
+										wgErr.Store(err)
+									}
+								}()
+							}
+							wg.Wait()
+							err := wgErr.Load()
+							if err == nil {
+								return nil
+							}
+							return err.(error)
+						}, nil
+					}
+					return nil, nil
 				}(*v.Ok, w)
 				if err != nil {
 					return nil, fmt.Errorf("failed to write `result::ok` payload: %w", err)
